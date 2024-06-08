@@ -1,42 +1,102 @@
 use crate::utils;
 use solana_sdk::program_pack::Pack;
 use spl_token::state::Mint;
-use reqwest::Client;
 use solana_sdk::pubkey::Pubkey;
 use std::time::Duration;
 use std::str::FromStr;
-use tokio::time::sleep;
 use solana_client::rpc_client::RpcClient;
 use serde::Deserialize;
 use utils::PoolInfo;
+use std::error::Error;
 
-#[derive(Deserialize, Debug)]
-#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
 pub struct TokenReport {
-    mint: String,
-    token: SplToken,
-    lp: Option<LpInfo>,
-    topHolders: Option<Vec<Holder>>,
+    pub token: TokenInfo,
+    pub top_holders: Option<Vec<TopHolder>>,
 }
 
-#[derive(Deserialize, Debug)]
-#[allow(dead_code)]
-struct SplToken {
-    freezeAuthority: Option<String>,
-    mintAuthority: Option<String>,
+#[derive(Debug, Deserialize)]
+pub struct TokenInfo {
+    pub freeze_authority: Option<Pubkey>,
+    pub mint_authority: Option<Pubkey>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
-#[allow(dead_code)]
-struct LpInfo {
-    lpLockedPct: u8,
+#[derive(Debug, Deserialize)]
+pub struct TopHolder {
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub pct: f64,
 }
 
-#[derive(Deserialize, Debug)]
-#[allow(dead_code)]
-struct Holder {
-    pct: f32,
-    owner: String,
+pub async fn get_current_sol_price() -> Result<f64, Box<dyn Error>> {
+    let url =
+        "https://public-api.birdeye.so/defi/price?address=So11111111111111111111111111111111111111112";
+
+    let birdeye_api_key = std::env
+        ::var("BIRDEYE_API")
+        .expect("You must set the RPC_URL environment variable!");
+    // Make GET request to the API endpoint with API key in header
+    let response = reqwest::Client
+        ::new()
+        .get(url)
+        .header("X-API-KEY", birdeye_api_key)
+        .send().await?;
+
+    // Check if response is successful
+    if response.status().is_success() {
+        // Parse the JSON response to extract the SOL price
+        let sol_price_json: serde_json::Value = response.json().await?;
+        println!("SOL price JSON: {:?}", sol_price_json);
+        let sol_price_usd: f64 = sol_price_json["data"]["value"].as_f64().unwrap_or(0.0);
+        Ok(sol_price_usd)
+    } else {
+        Err("Failed to fetch SOL price".into()) // Convert string to boxed Error trait object
+    }
+}
+
+async fn calculate_liquidity_usd(
+    client: &RpcClient,
+    base_token_account: Pubkey,
+    quote_token_account: Pubkey
+) -> Result<f64, Box<dyn Error>> {
+    let sol_price = get_current_sol_price().await?; // Get current SOL price
+
+    // Get base token balance
+    let base_token_info = match client.get_token_account_balance(&base_token_account) {
+        Ok(info) => info,
+        Err(err) => {
+            return Err(Box::new(err));
+        }
+    };
+    let base_balance = base_token_info.amount.parse::<f64>()?;
+
+    // Get quote token balance
+    let quote_token_info = match client.get_token_account_balance(&quote_token_account) {
+        Ok(info) => info,
+        Err(err) => {
+            return Err(Box::new(err));
+        }
+    };
+    let quote_balance = quote_token_info.amount.parse::<f64>()?;
+
+    // Calculate base price in SOL
+    let base_price_in_sol = quote_balance / base_balance;
+
+    // Calculate base price in USD
+    let base_price_in_usd = base_price_in_sol * sol_price;
+
+    // Calculate USD value of base balance
+    let value_usd_base_balance = base_balance * base_price_in_usd;
+
+    // Calculate USD value of quote balance
+    let value_usd_quote_balance = quote_balance * sol_price;
+
+    // Calculate liquidity USD value
+    let liquidity_usd = value_usd_base_balance + value_usd_quote_balance;
+
+    let formatted_liquidity = liquidity_usd / 1000000000.0;
+
+    Ok(formatted_liquidity)
 }
 
 pub async fn check_burnt_lp(
@@ -46,8 +106,9 @@ pub async fn check_burnt_lp(
     let lp_mint = pool_info.lp_mint;
     let lp_reserve = pool_info.lp_reserve;
     let timeout = Duration::from_secs(220); // 3 minutes
-    let retry_interval = Duration::from_secs(15); // Retry every 5 seconds
+    let retry_interval = Duration::from_secs(15); // Retry every 15 seconds
     let start_time = tokio::time::Instant::now();
+    println!("Checking for burnt LP: {:?}", lp_mint.to_string());
 
     loop {
         // Check elapsed time
@@ -59,7 +120,7 @@ pub async fn check_burnt_lp(
         let acc_info = match client.get_account(&lp_mint) {
             Ok(info) => info,
             Err(_) => {
-                sleep(retry_interval).await;
+                tokio::time::sleep(retry_interval).await;
                 continue;
             }
         };
@@ -67,7 +128,7 @@ pub async fn check_burnt_lp(
         let mint_info = match Mint::unpack(acc_info.data.as_slice()) {
             Ok(info) => info,
             Err(_) => {
-                sleep(retry_interval).await;
+                tokio::time::sleep(retry_interval).await;
                 continue;
             }
         };
@@ -81,28 +142,81 @@ pub async fn check_burnt_lp(
         let burn_pct = (burn_amt / lp_reserve_amount) * 100.0;
 
         if burn_pct > 80.0 {
-            return Ok(true);
+            println!("POOL INFO: {:?}", pool_info);
+            println!("Burnt LP detected: {}%", burn_pct);
+            let liquidity_usd = calculate_liquidity_usd(
+                client,
+                pool_info.base_vault,
+                pool_info.quote_vault
+            ).await?;
+
+            return Ok(liquidity_usd > 1000.0); // Return true if liquidity is greater than $1000
         }
 
         // Wait before retrying
-        sleep(retry_interval).await;
+        tokio::time::sleep(retry_interval).await;
     }
 }
 
-pub async fn fetch_token_report(token: &str) -> Result<TokenReport, reqwest::Error> {
-    let url = format!("https://api.rugcheck.xyz/v1/tokens/{}/report", token);
-    let client = Client::new();
-    let response = client.get(&url).header("accept", "application/json").send().await?;
-    let report = response.json().await?;
-    Ok(report)
+pub async fn get_top_holders(
+    client: &RpcClient,
+    token: &Pubkey
+) -> Result<Vec<TopHolder>, Box<dyn std::error::Error>> {
+    let token_accounts = match client.get_token_largest_accounts(token) {
+        Ok(accounts) => accounts,
+        Err(err) => {
+            return Err(err.into());
+        }
+    };
+
+    //println!("{:?}", token_accounts);
+
+    let token_supply = match client.get_token_supply(token) {
+        Ok(supply) => supply.amount.parse::<f64>().unwrap(),
+        Err(err) => {
+            return Err(err.into());
+        }
+    };
+
+    println!("Token supply: {}", token_supply);
+
+    let top_holders: Result<Vec<TopHolder>, Box<dyn std::error::Error>> = token_accounts
+        .into_iter()
+        .map(|account| {
+            let owner = Pubkey::from_str(&account.address).unwrap();
+            let amount = match account.amount.amount.parse::<u64>() {
+                Ok(amount) => amount,
+                Err(err) => {
+                    println!("Error parsing amount: {:?}", err);
+                    return Err(err.into());
+                }
+            };
+            let pct = match ((amount as f64) / token_supply) * 100.0 {
+                pct if pct.is_nan() => {
+                    println!("Percentage calculation resulted in NaN");
+                    return Err("Percentage calculation resulted in NaN".into());
+                }
+                pct => pct,
+            };
+            println!("{:?} - {} - {}", owner, amount, pct);
+
+            Ok(TopHolder {
+                owner,
+                amount,
+                pct,
+            })
+        })
+        .collect();
+    let top_holders = top_holders.map_err(|err| err)?;
+    println!("TOP HOLDERS: {:?}", top_holders);
+    Ok(top_holders)
 }
 
 pub async fn check_rug_sol(
     client: &RpcClient,
-    token: &str
+    token: &Pubkey
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    let token_pubkey = Pubkey::from_str(token)?;
-    let mint_account = client.get_account(&token_pubkey)?;
+    let mint_account = client.get_account(&token)?;
     let mint_data = mint_account.data.as_slice();
 
     let mint_token = Mint::unpack(mint_data)?;
@@ -113,33 +227,31 @@ pub async fn check_rug_sol(
     Ok(is_rug)
 }
 
-pub async fn rug_check(
+pub async fn pre_rug_check(
     client: &RpcClient,
-    token: &str
+    token: &Pubkey
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    if token == "So11111111111111111111111111111111111111112" {
+    if token.to_string() == "So11111111111111111111111111111111111111112" {
         return Ok(false); // This token is not a rug
     }
 
-    // First, try fetching the token report
-    let report = match fetch_token_report(token).await {
-        Ok(report) => report,
-        Err(_) => {
-            // If no report is found, fall back to checking via Solana
-            return check_rug_sol(client, token).await;
-        }
-    };
+    let is_freeze_and_mint_disabled = check_rug_sol(client, token).await?;
 
-    // If report is found, proceed with its analysis
-    let freeze_authority = report.token.freezeAuthority;
-    let mint_authority = report.token.mintAuthority;
+    return Ok(is_freeze_and_mint_disabled);
+}
 
+async fn post_rug_check(
+    client: &RpcClient,
+    token: &Pubkey
+) -> Result<bool, Box<dyn std::error::Error>> {
     // Check if Raydium is the largest holder and exclude it from the large holder check
     let raydium_address = "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1";
-    let top_holders = report.topHolders.unwrap_or_default();
+
+    let top_holders = get_top_holders(client, token).await?;
+    // Check if Raydium is the largest holder and exclude it from the large holder check
     let raydium_is_largest = top_holders
         .first()
-        .map_or(false, |holder| holder.owner == raydium_address);
+        .map_or(false, |holder| holder.owner.to_string() == raydium_address);
 
     if !raydium_is_largest {
         return Ok(true); // Consider it a rug if Raydium is not the largest holder
@@ -148,11 +260,11 @@ pub async fn rug_check(
     // Check if any of the top holders (excluding Raydium) have more than 20%
     let large_holder = top_holders
         .iter()
-        .filter(|holder| holder.owner != raydium_address)
+        .filter(|holder| holder.owner.to_string() != raydium_address)
         .any(|holder| holder.pct > 20.0);
 
     // If no large holder is found and both authorities are None, return false (not a rug)
-    if !large_holder && freeze_authority.is_none() && mint_authority.is_none() {
+    if !large_holder {
         Ok(false)
     } else {
         Ok(true) // Otherwise, consider it as a rug

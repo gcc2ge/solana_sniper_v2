@@ -18,7 +18,7 @@ use solana_transaction_status::UiParsedInstruction;
 use solana_transaction_status::option_serializer::OptionSerializer;
 use solana_transaction_status::UiInnerInstructions;
 use solana_transaction_status::parse_instruction::ParsedInstruction;
-use rugcheck::{ check_burnt_lp, rug_check };
+use rugcheck::{ check_burnt_lp, pre_rug_check };
 use utils::fix_relaxed_json_in_lp_log_entry;
 use utils::PoolInfo;
 use utils::find_log_entry;
@@ -99,7 +99,7 @@ pub async fn check_for_new_pool(
         println!("Kigger på {}", pool_info.base_mint);
 
         // First, check if it's a rug
-        match rug_check(&rpc_client, &pool_info.base_mint.to_string()).await {
+        match pre_rug_check(&rpc_client, &pool_info.base_mint).await {
             Ok(is_rug) => {
                 if is_rug {
                     dbg!("Rug detected");
