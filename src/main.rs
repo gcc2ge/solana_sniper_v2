@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program_address = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"; // RAYDIUM_PUBLIC_KEY
     let rpc_client: Arc<RpcClient> = Arc::new(RpcClient::new(rpc_endpoint.to_string()));
     let pubsub_client: PubsubClient = PubsubClient::new(&wss_endpoint).await?;
-    let wsol_amount = 0.01;
+    let wsol_amount = 0.03;
 
     loop {
         // Check WSOL balance before listening for buys
