@@ -26,7 +26,7 @@ pub async fn listen_for_buys(
     const MAX_RETRIES: usize = 3;
     const INITIAL_RETRY_DELAY: u64 = 2;
     const TOKEN_THRESHOLD: usize = 3;
-    const SLEEP_DURATION: u64 = 600;
+    const THRESHOLD_SLEEP_DURATION: u64 = 300; // 5 minutes
 
     let (mut stream, _) = pub_subclient.logs_subscribe(
         RpcTransactionLogsFilter::Mentions(vec![program_address.to_string()]),
@@ -51,9 +51,18 @@ pub async fn listen_for_buys(
                     seen_transactions.push(tx_signature.clone());
 
                     let mut retry_count = 0;
-                    let retry_delay = INITIAL_RETRY_DELAY;
+                    let mut retry_delay = INITIAL_RETRY_DELAY;
 
                     loop {
+                        let mongo_handler = MongoHandler::new().await.expect(
+                            "Failed to create MongoHandler"
+                        );
+                        let tokens = mongo_handler.fetch_all_tokens("solsniper", "tokens").await?;
+                        if tokens.len() > TOKEN_THRESHOLD {
+                            sleep(Duration::from_secs(THRESHOLD_SLEEP_DURATION)).await;
+                            break; // Exit the retry loop
+                        }
+
                         match try_get_transaction(&rpc_client, &tx_signature).await {
                             Ok(tx) => {
                                 let _signature = check_for_new_pool(
@@ -61,33 +70,19 @@ pub async fn listen_for_buys(
                                     &rpc_client,
                                     sol_amount
                                 ).await;
-                                break;
+                                break; // Exit the retry loop if transaction successful
                             }
                             Err(err) => {
                                 retry_count += 1;
 
                                 if retry_count > MAX_RETRIES {
                                     eprintln!("Failed to get transaction: {}", err);
-                                    break;
+                                    break; // Exit the retry loop if max retries exceeded
                                 }
 
-                                // Check token count before retrying
-                                let mongo_handler = MongoHandler::new().await.expect(
-                                    "Failed to create MongoHandler"
-                                );
-                                let tokens = mongo_handler.fetch_all_tokens(
-                                    "solsniper",
-                                    "tokens"
-                                ).await?;
-                                if tokens.len() > TOKEN_THRESHOLD {
-                                    println!("Retrying to get transaction in {} seconds", retry_delay);
-                                    sleep(Duration::from_secs(SLEEP_DURATION)).await;
-                                } else {
-                                    println!(
-                                        "More than 3 tokens are not sold yet. Sov i 10 minutter"
-                                    );
-                                }
-                                continue; // Continue to the next iteration of the loop
+                                // Retry with exponential backoff delay
+                                sleep(Duration::from_secs(retry_delay)).await;
+                                retry_delay *= 2;
                             }
                         }
                     }
@@ -95,9 +90,12 @@ pub async fn listen_for_buys(
             }
             None => {
                 println!("End of stream");
+                break; // Exit the loop when the stream ends
             }
         }
     }
+
+    Ok(())
 }
 
 async fn try_get_transaction(

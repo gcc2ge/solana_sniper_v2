@@ -46,7 +46,6 @@ pub async fn get_current_sol_price() -> Result<f64, Box<dyn Error>> {
     if response.status().is_success() {
         // Parse the JSON response to extract the SOL price
         let sol_price_json: serde_json::Value = response.json().await?;
-        println!("SOL price JSON: {:?}", sol_price_json);
         let sol_price_usd: f64 = sol_price_json["data"]["value"].as_f64().unwrap_or(0.0);
         Ok(sol_price_usd)
     } else {
@@ -108,7 +107,6 @@ pub async fn check_burnt_lp(
     let timeout = Duration::from_secs(220); // 3 minutes
     let retry_interval = Duration::from_secs(15); // Retry every 15 seconds
     let start_time = tokio::time::Instant::now();
-    println!("Checking for burnt LP: {:?}", lp_mint.to_string());
 
     loop {
         // Check elapsed time
@@ -142,8 +140,6 @@ pub async fn check_burnt_lp(
         let burn_pct = (burn_amt / lp_reserve_amount) * 100.0;
 
         if burn_pct > 80.0 {
-            println!("POOL INFO: {:?}", pool_info);
-            println!("Burnt LP detected: {}%", burn_pct);
             let liquidity_usd = calculate_liquidity_usd(
                 client,
                 pool_info.base_vault,
@@ -169,16 +165,12 @@ pub async fn get_top_holders(
         }
     };
 
-    //println!("{:?}", token_accounts);
-
     let token_supply = match client.get_token_supply(token) {
         Ok(supply) => supply.amount.parse::<f64>().unwrap(),
         Err(err) => {
             return Err(err.into());
         }
     };
-
-    println!("Token supply: {}", token_supply);
 
     let top_holders: Result<Vec<TopHolder>, Box<dyn std::error::Error>> = token_accounts
         .into_iter()
@@ -187,19 +179,15 @@ pub async fn get_top_holders(
             let amount = match account.amount.amount.parse::<u64>() {
                 Ok(amount) => amount,
                 Err(err) => {
-                    println!("Error parsing amount: {:?}", err);
                     return Err(err.into());
                 }
             };
             let pct = match ((amount as f64) / token_supply) * 100.0 {
                 pct if pct.is_nan() => {
-                    println!("Percentage calculation resulted in NaN");
                     return Err("Percentage calculation resulted in NaN".into());
                 }
                 pct => pct,
             };
-            println!("{:?} - {} - {}", owner, amount, pct);
-
             Ok(TopHolder {
                 owner,
                 amount,
@@ -208,7 +196,6 @@ pub async fn get_top_holders(
         })
         .collect();
     let top_holders = top_holders.map_err(|err| err)?;
-    println!("TOP HOLDERS: {:?}", top_holders);
     Ok(top_holders)
 }
 

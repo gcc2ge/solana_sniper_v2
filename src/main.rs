@@ -53,7 +53,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             break;
         } else {
-            println!("Insufficient WSOL balance. Sleeping for 1 hour.");
             tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await; // Sleep for 1 hour
         }
     }

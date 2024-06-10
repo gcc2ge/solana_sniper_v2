@@ -96,7 +96,6 @@ pub async fn check_for_new_pool(
         if pool_info.base_mint.to_string() == "So11111111111111111111111111111111111111112" {
             return Err(PoolError::BaseMintIsSOL);
         }
-        println!("Kigger på {}", pool_info.base_mint);
 
         // First, check if it's a rug
         match pre_rug_check(&rpc_client, &pool_info.base_mint).await {
