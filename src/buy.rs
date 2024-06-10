@@ -79,7 +79,7 @@ pub async fn listen_for_buys(
                                     "solsniper",
                                     "tokens"
                                 ).await?;
-                                if tokens.len() <= TOKEN_THRESHOLD {
+                                if tokens.len() > TOKEN_THRESHOLD {
                                     println!("Retrying to get transaction in {} seconds", retry_delay);
                                     sleep(Duration::from_secs(SLEEP_DURATION)).await;
                                 } else {
