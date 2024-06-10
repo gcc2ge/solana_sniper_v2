@@ -1,0 +1,66 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Build Docker image
+        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/solana_sniper:latest .
+
+      - name: Push Docker image to Docker Hub
+        run: docker push ${{ secrets.DOCKER_USERNAME }}/solana_sniper:latest
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Install SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Test SSH Connection
+        run: |
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} echo "SSH connection successful"
+
+      - name: SSH into VPS and update Docker container
+        uses: appleboy/ssh-action@v0.1.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_KEY }}
+          script: |
+            docker login -u "${{ secrets.DOCKER_USERNAME }}" -p "${{ secrets.DOCKER_PASSWORD }}"
+            docker pull ${{ secrets.DOCKER_USERNAME }}/solana_sniper:latest
+            if [ "$(docker ps -a -q -f name=sniper_container)" ]; then
+              docker stop sniper_container
+              docker rm sniper_container
+            fi
+            docker run --privileged -d --name sniper_container \
+             -e "MONGODB_URI=${{ secrets.MONGODB_URI }}" \
+             -e "PRIVATE_KEY=${{ secrets.PRIVATE_KEY }}" \
+             -e "RPC_URL=${{ secrets.RPC_URL }}" \
+             -e "WSS_URL=${{ secrets.WSS_URL }}" \
+             -e "BIRDEYE_API=${{ secrets.BIRDEYE_API }}" \
+             -e "REDIS_URL=${{ secrets.REDIS_URL }}" \
+              ${{ secrets.DOCKER_USERNAME }}/solana_sniper:latest

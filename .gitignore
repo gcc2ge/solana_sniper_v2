@@ -1,4 +1,5 @@
 /target
 .env
+.env.prod
 liquidity_pools.json
 prices.json

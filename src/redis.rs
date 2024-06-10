@@ -45,9 +45,12 @@ pub struct BuyTransaction {
 pub fn buy(transaction: BuyTransaction) {
     // Serialize the BuyTransaction object into JSON
     let transaction_json = serde_json::to_string(&transaction).unwrap();
+    let redis_url = std::env
+        ::var("REDIS_URL")
+        .expect("You must set the REDIS_URL environment variable!");
 
     // Connect to Redis
-    let client = Client::open("redis://127.0.0.1:6379/").unwrap();
+    let client = Client::open(redis_url).unwrap();
     let mut connection = client.get_connection().unwrap();
 
     // Publish the JSON payload to the "trading" channel

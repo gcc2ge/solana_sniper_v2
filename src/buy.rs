@@ -1,5 +1,6 @@
 use crate::utils::find_log_entry;
 use crate::swap::check_for_new_pool;
+use crate::mongo::MongoHandler;
 use std::sync::Arc;
 use solana_client::rpc_client::RpcClient;
 use solana_client::{
@@ -24,6 +25,8 @@ pub async fn listen_for_buys(
 ) -> Result<(), Box<dyn std::error::Error + 'static>> {
     const MAX_RETRIES: usize = 3;
     const INITIAL_RETRY_DELAY: u64 = 2;
+    const TOKEN_THRESHOLD: usize = 3;
+    const SLEEP_DURATION: u64 = 600;
 
     let (mut stream, _) = pub_subclient.logs_subscribe(
         RpcTransactionLogsFilter::Mentions(vec![program_address.to_string()]),
@@ -67,7 +70,24 @@ pub async fn listen_for_buys(
                                     eprintln!("Failed to get transaction: {}", err);
                                     break;
                                 }
-                                sleep(Duration::from_secs(retry_delay)).await;
+
+                                // Check token count before retrying
+                                let mongo_handler = MongoHandler::new().await.expect(
+                                    "Failed to create MongoHandler"
+                                );
+                                let tokens = mongo_handler.fetch_all_tokens(
+                                    "solsniper",
+                                    "tokens"
+                                ).await?;
+                                if tokens.len() <= TOKEN_THRESHOLD {
+                                    println!("Retrying to get transaction in {} seconds", retry_delay);
+                                    sleep(Duration::from_secs(SLEEP_DURATION)).await;
+                                } else {
+                                    println!(
+                                        "More than 3 tokens are not sold yet. Sov i 10 minutter"
+                                    );
+                                }
+                                continue; // Continue to the next iteration of the loop
                             }
                         }
                     }
