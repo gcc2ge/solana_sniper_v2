@@ -1,4 +1,4 @@
-use redis::{ Client, Commands };
+use redis::AsyncCommands;
 use serde_json;
 use serde::{ Serialize, Deserialize };
 
@@ -42,17 +42,27 @@ pub struct BuyTransaction {
 }
 
 // Adjust the buy function to accept BuyTransaction and LiquidityPoolKeysString
-pub fn buy(transaction: BuyTransaction) {
+pub async fn buy(transaction: BuyTransaction) -> Result<(), Box<dyn std::error::Error>> {
     // Serialize the BuyTransaction object into JSON
-    let transaction_json = serde_json::to_string(&transaction).unwrap();
+    let transaction_json = serde_json
+        ::to_string(&transaction)
+        .map_err(|e| format!("Failed to serialize BuyTransaction: {}", e))?;
+
     let redis_url = std::env
         ::var("REDIS_URL")
-        .expect("You must set the REDIS_URL environment variable!");
+        .map_err(|e| format!("You must set the REDIS_URL environment variable: {}", e))?;
 
-    // Connect to Redis
-    let client = Client::open(redis_url).unwrap();
-    let mut connection = client.get_connection().unwrap();
+    let client = redis::Client
+        ::open(redis_url)
+        .map_err(|e| format!("Failed to create Redis client: {}", e))?;
+    let mut connection = client
+        .get_multiplexed_async_connection().await
+        .map_err(|e| format!("Failed to get Redis connection: {}", e))?;
 
     // Publish the JSON payload to the "trading" channel
-    let _: usize = connection.publish("trading", transaction_json).unwrap();
+    connection
+        .publish("trading", transaction_json).await
+        .map_err(|e| format!("Failed to publish message to trading channel: {}", e))?;
+
+    Ok(())
 }

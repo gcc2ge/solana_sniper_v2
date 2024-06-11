@@ -41,6 +41,7 @@ pub enum PoolError {
     LPNotBurnt,
     #[error("No pool info found")]
     NoPoolInfoFound,
+    #[error("Buy error: {0}")] BuyError(String),
     #[error("{0}")] Other(Box<dyn Error>), // Generic variant for other errors
 }
 
@@ -138,7 +139,9 @@ pub async fn check_for_new_pool(
                             lp_decimals: pool_info.lp_decimals,
                         };
 
-                        buy(buy_transaction);
+                        if let Err(e) = buy(buy_transaction).await {
+                            return Err(PoolError::BuyError(e.to_string()));
+                        }
 
                         return Ok("Success".to_string());
                     } else {

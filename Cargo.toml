@@ -20,7 +20,7 @@ solana-program = "1.18.12"
 solana-transaction-status = "1.18.12"
 spl-associated-token-account ="2.3.0"
 reqwest = { version = "0.11", features = ["json"] }
-redis = { version = "0.25.3", features = ["tokio-comp"] }
+redis = { version = "0.25.3", features = [ "tls", "tokio-native-tls-comp","tokio-comp"] }
 solana-sdk = "1.8"
 solana-client = "1.18.12"
 solana-account-decoder = "1.18.12"

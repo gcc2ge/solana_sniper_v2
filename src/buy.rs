@@ -60,6 +60,7 @@ pub async fn listen_for_buys(
                         let tokens = mongo_handler.fetch_all_tokens("solsniper", "tokens").await?;
                         if tokens.len() > TOKEN_THRESHOLD {
                             sleep(Duration::from_secs(THRESHOLD_SLEEP_DURATION)).await;
+                            dbg!("Threshold reached, sleeping for 5 minutes");
                             break; // Exit the retry loop
                         }
 
